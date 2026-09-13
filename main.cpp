@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <locale.h>
 #include <ncurses.h>
 // #include <string.h>
@@ -7,11 +8,12 @@
 #include <vector>
 #include <random>
 
+#define COLOR_REDDISH 10
+
 std::vector<std::string> tetromino(7);
 const int nTetrominoSize{ 4 };
-
-int nFieldWidth{ 14 };
-int nFieldHeight{ 18 };
+const int nFieldWidth{ 14 };
+const int nFieldHeight{ 18 };
 unsigned char* pField{ nullptr };
 
 // returs index in rotated tetramino grid
@@ -94,7 +96,6 @@ int MainMenu(int nScore, bool bGameOver = false)
 			default:
 				break;
 		}
-
 		// dont process ESC key if game is over
 		if (choice == '\n' || (choice == 27 && !bGameOver))
 			break;
@@ -151,20 +152,35 @@ void CreateAssets()
 
 int main()
 {
+	std::random_device rd;
+	std::mt19937 gen{ rd() };
+	std::uniform_int_distribution<int> dist(0, 1000);
+
 	// init ncurses
 	setlocale(LC_ALL, "");
 	initscr();
-	keypad(stdscr, true);
 	raw();
-	// nodelay(stdscr, true);
-	timeout(0);
 	noecho();
 	curs_set(0);	 // disable cursor
 	set_escdelay(0); // disable delay for escape sequences
 
-	std::random_device rd;
-	std::mt19937 gen{ rd() };
-	std::uniform_int_distribution<int> dist(0, 1000);
+	WINDOW* wField{ newwin(nFieldHeight, (nFieldWidth - 1) * 2, (LINES - nFieldHeight) / 2,
+			       (COLS - nFieldWidth * 2) / 2) };
+	wborder(wField, 0, 0, ' ', 0, 0, 0, 0, 0);
+	nodelay(wField, true);
+	keypad(wField, true);
+
+	start_color();
+	init_color(COLOR_REDDISH, 1000, 0, 0);
+
+	init_pair(1, COLOR_REDDISH, COLOR_REDDISH);
+	init_pair(2, COLOR_GREEN, COLOR_GREEN);
+	init_pair(3, COLOR_YELLOW, COLOR_YELLOW);
+	init_pair(4, COLOR_BLUE, COLOR_BLUE);
+	init_pair(5, COLOR_MAGENTA, COLOR_MAGENTA);
+	init_pair(6, COLOR_CYAN, COLOR_CYAN);
+	init_pair(7, COLOR_WHITE, COLOR_WHITE);
+	init_pair(9, COLOR_WHITE, COLOR_BLACK);
 
 	// Tetromino assets
 	CreateAssets();
@@ -173,9 +189,11 @@ int main()
 	pField = new unsigned char[nFieldWidth * nFieldHeight];
 	for (int y{ 0 }; y < nFieldHeight; ++y)
 		for (int x{ 0 }; x < nFieldWidth; ++x)
+		{
 			pField[y * nFieldWidth + x] = (x == 0 || x == nFieldWidth - 1 || y == nFieldHeight - 1)
-							  ? 9  // 9 - boarder
+							  ? 9  // 3 - boarder
 							  : 0; // 0 - inside area
+		}
 
 	// Game logic stuff
 	bool bGameOver{ false };
@@ -184,11 +202,14 @@ int main()
 	int nCurrentRotation{ dist(gen) % 4 };
 	int nCurrentY{ 0 };
 	int nCurrentX{ (nFieldWidth - nTetrominoSize) / 2 };
+	int nCurrentColor{ nCurrentPiece + 1 };
 
 	bool bRotateHold{ false };
 
-	int nSpeed{ 60 }; // difficulty of the game
-	int nSpeedCounter{ 0 };
+	std::vector<int> vLine;
+
+	int nSpeed{ 120 }; // difficulty of the game
+	int64_t nFrameCounter{ 0 };
 	bool bForceDown{ false };
 	int nPieceCount{ 0 };
 	int nScores{ 0 };
@@ -201,11 +222,12 @@ int main()
 		nCurrentRotation = dist(gen) % 4;
 		nCurrentY	 = 0;
 		nCurrentX	 = (nFieldWidth - nTetrominoSize) / 2;
+		nCurrentColor	 = nCurrentPiece + 1;
 
 		bRotateHold = false;
 
-		nSpeed	       = 60;
-		nSpeedCounter  = 0;
+		nSpeed	       = 120;
+		nFrameCounter  = 0;
 		bForceDown     = false;
 		nPieceCount    = 0;
 		nScores	       = 0;
@@ -216,22 +238,24 @@ int main()
 		for (int py{ 0 }; py < nFieldHeight - 1; ++py)
 			for (int px{ 1 }; px < nFieldWidth - 1; ++px)
 				pField[py * nFieldWidth + px] = 0;
-		clear();
 	};
-	std::vector<int> vLine;
+
+	int fps{ 120 };
+	auto frame_duration{ std::chrono::duration<double>(1.0 / fps) };
 
 	// GAME LOOP
 	while (!bGameOver)
 	{
+
 		// GAME TIMING ============================================================================
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(16));
-		++nSpeedCounter;
-		bForceDown = (nSpeedCounter == nSpeed);
+		auto frame_start{ std::chrono::steady_clock::now() };
+		bForceDown = (nFrameCounter % nSpeed == 0);
 
 		// INPUT ==================================================================================
 
-		int c{ getch() };
+		int key{};
+		int c{ wgetch(wField) };
 
 		nCurrentX -=
 		    (c == KEY_LEFT && DoesPieceFit(nCurrentPiece, nCurrentRotation, nCurrentY, nCurrentX - 1)) ? 1 : 0;
@@ -251,7 +275,7 @@ int main()
 		else
 			bRotateHold = false;
 
-		if (c == 27)
+		if (c == 27) // ESC
 		{
 			int nSelectedOption{ MainMenu(nScores) };
 
@@ -259,6 +283,8 @@ int main()
 			if (nSelectedOption == 0)
 			{
 				initGame();
+				clear();
+				wclear(wField);
 				continue;
 			}
 			// Quit
@@ -280,7 +306,7 @@ int main()
 					for (int px{ 0 }; px < nTetrominoSize; ++px)
 						if (tetromino[nCurrentPiece][Rotate(py, px, nCurrentRotation)] == 'X')
 							pField[(nCurrentY + py) * nFieldWidth + (nCurrentX + px)] =
-							    nCurrentPiece + 1;
+							    nCurrentPiece + 1; // 1 - ██
 
 				// Check have we got any lines
 				for (int py{ 0 }; py < nTetrominoSize; ++py)
@@ -296,7 +322,7 @@ int main()
 						{
 							for (int px{ 1 }; px < nFieldWidth - 1; ++px)
 								pField[(nCurrentY + py) * nFieldWidth + px] =
-								    8; // set all elements in row to "="
+								    8; // cleared line -  ░░
 							vLine.push_back(nCurrentY + py);
 						}
 					}
@@ -306,6 +332,7 @@ int main()
 				nCurrentRotation = dist(gen) % 4;
 				nCurrentY	 = 0;
 				nCurrentX	 = (nFieldWidth - nTetrominoSize) / 2;
+				nCurrentColor	 = nCurrentPiece + 1;
 
 				// if piece does not fit in entire field - game over
 				bGameOver = !DoesPieceFit(nCurrentPiece, nCurrentRotation, nCurrentY, nCurrentX);
@@ -319,45 +346,63 @@ int main()
 
 				// Change speed (difficulty)
 				++nPieceCount;
-				if (nPieceCount % 10 == 0 && nSpeed >= 10)
-					nSpeed -= 5;
+				if (nPieceCount % 10 == 0 && nSpeed > 20)
+					nSpeed -= 10;
 			}
-			nSpeedCounter = 0;
 		}
 
 		// RENDER OUTPUT ==========================================================================
 
-		int offsetFieldY{ (LINES - nFieldHeight) / 2 };
-		int offsetFieldX{ (COLS - nFieldWidth) / 2 };
-
-		// clear the screen when terminal dimensions change
+		// clear and move the window when terminal dimensions change
 		if (!(lastTermHeight == LINES && lastTermWidth == COLS))
 		{
 			lastTermHeight = LINES;
 			lastTermWidth  = COLS;
 			clear();
+			mvwin(wField, (LINES - nFieldHeight) / 2, (COLS - nFieldWidth * 2) / 2);
 		}
 
 		// Draw Field
 		for (int y{ 0 }; y < nFieldHeight; ++y)
 			for (int x{ 0 }; x < nFieldWidth; ++x)
-				mvaddch(offsetFieldY + y, offsetFieldX + x, " ABCDEFG=#"[pField[y * nFieldWidth + x]]);
+			{
+				unsigned char cell{ pField[y * nFieldWidth + x] };
+				// -1 (+ decreased window width) to remove most left and most right empty colums
+				if (cell == 0)
+				{
+					wattron(wField, COLOR_PAIR(9));
+					mvwprintw(wField, y, x * 2 - 1, "░░");
+					wattroff(wField, COLOR_PAIR(9));
+				}
+				if (cell >= 1 && cell <= 7)
+				{
+					wattron(wField, COLOR_PAIR(cell));
+					mvwaddstr(wField, y, x * 2 - 1, "██");
+					wattroff(wField, COLOR_PAIR(cell));
+				}
+				if (pField[y * nFieldWidth + x] == 8)
+					mvwprintw(wField, y, x * 2 - 1, "░░");
+			}
 
 		// Draw Current Piece
 		for (int py{ 0 }; py < nTetrominoSize; ++py)
 			for (int px{ 0 }; px < nTetrominoSize; ++px)
 				if (tetromino[nCurrentPiece][Rotate(py, px, nCurrentRotation)] == 'X')
-					mvaddch(offsetFieldY + nCurrentY + py, offsetFieldX + nCurrentX + px,
-						nCurrentPiece + 65);
+				{
+					wattron(wField, COLOR_PAIR(nCurrentColor));
+					mvwprintw(wField, nCurrentY + py, (nCurrentX + px) * 2 - 1, "██");
+					wattroff(wField, COLOR_PAIR(nCurrentColor));
+				}
 
 		// Draw player's score
-		mvprintw(offsetFieldY + nFieldHeight + 2, (COLS - 8) / 2, "Score: %d", nScores);
+		mvprintw((LINES - nFieldHeight) / 2 + nFieldHeight + 2, (COLS - 8) / 2, "Score: %d", nScores);
+		refresh();
 
 		// if 1 or more lines are full
 		if (!vLine.empty())
 		{
-			refresh();
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			// refresh();
+			// std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 			for (auto& v : vLine)
 				for (int px{ 1 }; px < nFieldWidth - 1; ++px)
@@ -370,12 +415,23 @@ int main()
 			vLine.clear();
 		}
 
+		wborder(wField, 0, 0, ' ', 0, 0, 0, 0, 0);
+		wrefresh(wField);
+
+		auto frame_end{ std::chrono::steady_clock::now() };
+		auto elapsed{ frame_end - frame_start };
+		if (elapsed < frame_duration)
+			std::this_thread::sleep_for(frame_duration - elapsed);
+
+		++nFrameCounter;
+
 		// open MainMenu on game over
 		if (bGameOver)
 			if (MainMenu(nScores, bGameOver) == 0) // start again
+			{
 				initGame();
-
-		refresh();
+				clear();
+			}
 	}
 
 	delete[] pField;
